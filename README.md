@@ -1,13 +1,13 @@
 # term-manga
 
-A terminal UI for getting manga onto an e-reader. Search MangaDex, download chapters as `.cbz`, convert them for a Kindle with KCC, and add them to your Calibre library.
+A terminal UI for getting manga onto an e-reader. Search MangaDex and Mangapill together, download chapters as `.cbz`, convert them for a Kindle with KCC, and add them to your Calibre library.
 
 Built in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles) and [Lip Gloss](https://github.com/charmbracelet/lipgloss).
 
 ## Pipeline
 
 ```
-MangaDex API ──► .cbz ──► kcc-c2e ──► .epub ──► calibredb ──► Calibre library
+MangaDex / Mangapill ──► .cbz ──► kcc-c2e ──► .epub ──► calibredb ──► Calibre library
   (search,       (zip of   (KPW5,       (RTL,      (series +
    chapters,      pages)    manga,       cropped)   chapter
    pages)                   crop)                   metadata)
@@ -22,7 +22,7 @@ Each stage is optional. You can stop after the download and convert later.
 - `7z` (Arch package `7zip`). KCC uses it to extract archives.
 - `calibredb`, from Calibre
 
-Download-only use needs none of the external tools. They are checked when you press `c`.
+Download-only use needs none of the external tools. They are checked when you press `c` or `m`.
 
 ## Build and run
 
@@ -61,11 +61,32 @@ The app has four screens.
 | Chapters | `space`            | Select or deselect a chapter                                  |
 | Chapters | `a`                | Select all, or clear the selection if all are selected        |
 | Chapters | `enter`            | Download only                                                 |
-| Chapters | `c`                | Download, convert to EPUB, and import into Calibre            |
+| Chapters | `c`                | Download, convert each chapter to its own EPUB, and import into Calibre |
+| Chapters | `m`                | Download, merge into one EPUB per volume, and import into Calibre |
 | Chapters | `esc` or `q`       | Back to results                                               |
 | Any      | `ctrl+c`           | Quit and cancel the running download                          |
 
-If no chapters are selected, `enter` and `c` act on the chapter under the cursor.
+If no chapters are selected, `enter`, `c` and `m` act on the chapter under the cursor.
+
+## Sources
+
+Search queries every source at once and tags each result, for example `[MangaDex] Hunter x Hunter (1998)` or `[Mangapill] Hunter x Hunter (1998)`. If one source is down you still get the other's results. Chapters and pages are fetched from the source the result came from.
+
+| Source    | How                          | Notes                                                                 |
+|-----------|------------------------------|-----------------------------------------------------------------------|
+| MangaDex  | Public REST API             | Has volume data, so `m` can group by volume.                          |
+| Mangapill | HTML scraping (no API)      | No volume data. May break if the site changes its markup. Images need a `Referer` header, which the app sends. |
+
+Sources implement the `source.Source` interface in `internal/source/source.go`. Both sources host unlicensed scanlations. Comick was tried and dropped: its API lists chapters but returns no page images.
+
+## Merging into volumes (`m`)
+
+`m` downloads the selected chapters, then fuses them into EPUBs with `kcc-c2e --filefusion` and imports each into Calibre as part of one series, indexed by volume:
+
+- One EPUB per MangaDex volume (`<Series> - Vol. 3.epub`), written to `~/Manga/<series>/epub/`.
+- Chapters with no volume number are chunked 12 at a time (`<Series> - Ch. 41-50.epub`). Volumes of more than 12 chapters are split into parts (`Vol. 3 pt. 1`).
+- A file over 200 MB is reported as an error and not imported. Very large omnibuses make Kindles lag.
+- An existing merged EPUB is reused. If a volume gains chapters later, delete its EPUB to rebuild it.
 
 ## Where files go
 
@@ -82,6 +103,8 @@ Downloads are kept in `~/Manga`, in one folder per series:
 ```
 
 Characters that are illegal in file names (`/ \ : * ? " < > |`) are replaced with `_`.
+
+Merged volumes (`m`) are written to the same `epub/` folder.
 
 Re-running is safe. An existing `.cbz` or `.epub` is reused rather than rebuilt, and `calibredb` skips books it already has.
 
@@ -109,15 +132,17 @@ Chapters are added to your default Calibre library (the one Calibre last used, n
 
 | Field        | Value                   |
 |--------------|-------------------------|
-| Title        | `<Series> - Ch. <N>`    |
-| Author       | `MangaDex`              |
+| Title        | `<Series> - Ch. <N>`, or `<Series> - Vol. <N>` with `m` |
+| Author       | `MangaDex` (set for every source) |
 | Series       | The manga title         |
-| Series index | The chapter number      |
+| Series index | The chapter number, or the volume number with `m` |
 | Tags         | `manga`                 |
 
 If the Calibre desktop app is open, `calibredb` may refuse to write to the library. Close Calibre and retry.
 
 ## What gets listed
+
+The rules below are for MangaDex. Mangapill lists every chapter titled "Chapter N", with duplicate numbers collapsed.
 
 - **Language:** English only.
 - **Content rating:** safe and suggestive only.
@@ -144,12 +169,14 @@ golangci-lint run         # lint
 
 ```
 cmd/mangapipeline/     entry point
+internal/source/       Source interface shared by all sites
 internal/mangadex/     MangaDex API client: search, chapter feed, page URLs
-internal/download/     page downloads into .cbz, path and file-name helpers
-internal/pipeline/     kcc-c2e and calibredb wrappers
+internal/mangapill/    Mangapill scraper: search, chapter list, page URLs
+internal/download/     parallel page downloads into .cbz, path and file-name helpers
+internal/pipeline/     kcc-c2e and calibredb wrappers, volume grouping
 internal/tui/          Bubble Tea model and views
 ```
 
 ## Notes
 
-Only download manga you have the right to read in this way. Respect MangaDex's terms of service and API rate limits. The app sends one request at a time.
+Only download manga you have the right to read in this way. Respect each site's terms of service and rate limits. Pages are downloaded 6 at a time per chapter (`pageWorkers` in `internal/download/cbz.go`); lower it if a site starts rejecting requests.
