@@ -432,12 +432,14 @@ func (m *Model) downloadCmd() tea.Cmd {
 
 	run := func() tea.Msg {
 		defer cancel()
-		urls, err := src.PageURLs(ctx, ch.ID)
-		if err != nil {
-			return chapterDoneMsg{ch.Number, err}
-		}
 		dest := download.ChapterPath(root, series, ch.Number)
 		if _, statErr := os.Stat(dest); statErr != nil {
+			// Only ask the source for page URLs when we need them; MangaDex
+			// rate-limits that endpoint.
+			urls, err := src.PageURLs(ctx, ch.ID)
+			if err != nil {
+				return chapterDoneMsg{ch.Number, err}
+			}
 			err = download.CBZ(ctx, dest, urls, src.Referer(), func(done, total int) {
 				select {
 				case progCh <- pageProgressMsg{done, total}:
@@ -525,6 +527,9 @@ func (m Model) View() string {
 		}
 		if m.finished {
 			b.WriteString("\n" + okStyle.Render("Done.") + " " + dimStyle.Render("enter/esc back"))
+		} else if m.qIdx >= len(m.queue) {
+			// Every chapter is downloaded; the merge/import stage is running.
+			fmt.Fprintf(&b, "\n%s %s", m.spin.View(), m.stage)
 		} else {
 			cur := m.queue[m.qIdx]
 			fmt.Fprintf(&b, "\n%s Ch. %s (%d/%d)  %s", m.spin.View(),

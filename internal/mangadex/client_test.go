@@ -38,3 +38,22 @@ func TestPageURLs(t *testing.T) {
 		t.Fatalf("%v %v", got, err)
 	}
 }
+
+func TestGetRetriesOn429(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Write([]byte(`{"baseUrl":"https://cdn","chapter":{"hash":"h","data":["1.png"]}}`))
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), BaseURL: srv.URL}
+	got, err := c.PageURLs(context.Background(), "x")
+	if err != nil || len(got) != 1 || calls != 2 {
+		t.Fatalf("%v %v calls=%d", got, err, calls)
+	}
+}

@@ -7,7 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestCBZ(t *testing.T) {
@@ -47,5 +50,33 @@ func TestCBZFailureLeavesNothing(t *testing.T) {
 		if _, err := os.Stat(p); err == nil {
 			t.Fatal("left behind", p)
 		}
+	}
+}
+
+// While the first page is slow, workers must not fetch more than pageAhead pages.
+func TestCBZBoundsPagesAhead(t *testing.T) {
+	var served atomic.Int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served.Add(1)
+		if r.URL.Path == "/0.jpg" {
+			<-release
+		}
+		w.Write([]byte("x"))
+	}))
+	defer srv.Close()
+	var urls []string
+	for i := 0; i < 60; i++ {
+		urls = append(urls, srv.URL+"/"+strconv.Itoa(i)+".jpg")
+	}
+	done := make(chan error, 1)
+	go func() { done <- CBZ(context.Background(), filepath.Join(t.TempDir(), "x.cbz"), urls, "", nil) }()
+	time.Sleep(300 * time.Millisecond)
+	if n := served.Load(); n > pageAhead {
+		t.Fatalf("%d pages fetched while page 0 was pending, want <= %d", n, pageAhead)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

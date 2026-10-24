@@ -37,21 +37,52 @@ func (c *Client) Name() string { return "MangaDex" }
 // Referer implements source.Source; MangaDex images need none.
 func (c *Client) Referer() string { return "" }
 
+// maxRetries is how many times a rate-limited (429) request is retried.
+const maxRetries = 5
+
+// retryDelay returns how long to wait after a 429. MangaDex sends the time the
+// limit resets as a unix timestamp in X-RateLimit-Retry-After.
+func retryDelay(h http.Header) time.Duration {
+	d := 5 * time.Second
+	if v := h.Get("X-RateLimit-Retry-After"); v != "" {
+		if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
+			d = time.Until(time.Unix(ts, 0)) + 500*time.Millisecond
+		}
+	} else if v := h.Get("Retry-After"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil {
+			d = time.Duration(secs) * time.Second
+		}
+	}
+	return min(max(d, 0), 90*time.Second)
+}
+
 func (c *Client) get(ctx context.Context, path string, q url.Values, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path+"?"+q.Encode(), nil)
-	if err != nil {
-		return err
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path+"?"+q.Encode(), nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("User-Agent", "mangapipeline/0.1")
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRetries {
+			wait := retryDelay(resp.Header)
+			resp.Body.Close()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("mangadex %s: %s", path, resp.Status)
+		}
+		return json.NewDecoder(resp.Body).Decode(out)
 	}
-	req.Header.Set("User-Agent", "mangapipeline/0.1")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("mangadex %s: %s", path, resp.Status)
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 // Search returns manga matching title, English-translated, safe and suggestive only.

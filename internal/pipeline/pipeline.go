@@ -96,7 +96,7 @@ func GroupVolumes(chs []source.Chapter, max int) []Volume {
 				v.Index, _ = strconv.ParseFloat(vol, 64)
 				if n > 1 {
 					v.Label += fmt.Sprintf(" pt. %d", p+1)
-					v.Index += float64(p) / 10
+					v.Index += float64(p) / 100
 				}
 			} else {
 				first, last := part[0].Number, part[len(part)-1].Number
@@ -118,25 +118,26 @@ func MergedPath(dir, series, label string) string {
 }
 
 // ConvertMerged fuses cbzs into one EPUB at out via kcc-c2e --filefusion. An
-// existing EPUB is reused.
+// existing EPUB is reused, but it must still pass the size check. An oversized
+// EPUB is deleted so it can never be imported.
 func ConvertMerged(ctx context.Context, cbzs []string, title, out string) error {
-	if _, err := os.Stat(out); err == nil {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-		return err
-	}
-	args := []string{"-p", Profile, "-m", "-c", "2", "-f", "EPUB", "--nokepub",
-		"--filefusion", "-t", title, "-o", out}
-	cmd := exec.CommandContext(ctx, "kcc-c2e", append(args, cbzs...)...)
-	if b, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("kcc-c2e: %w: %s", err, tail(b))
+	if _, err := os.Stat(out); err != nil {
+		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			return err
+		}
+		args := []string{"-p", Profile, "-m", "-c", "2", "-f", "EPUB", "--nokepub",
+			"--filefusion", "-t", title, "-o", out}
+		cmd := exec.CommandContext(ctx, "kcc-c2e", append(args, cbzs...)...)
+		if b, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("kcc-c2e: %w: %s", err, tail(b))
+		}
 	}
 	fi, err := os.Stat(out)
 	if err != nil {
 		return fmt.Errorf("kcc-c2e finished but %s was not created", out)
 	}
 	if mb := fi.Size() >> 20; mb > MaxEpubMB {
+		os.Remove(out)
 		return fmt.Errorf("%s is %d MB (over %d MB); merge fewer chapters", filepath.Base(out), mb, MaxEpubMB)
 	}
 	return nil

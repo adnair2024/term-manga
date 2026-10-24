@@ -30,6 +30,11 @@
 - Chapters already downloaded show a green `✓`. The marks refresh when you come back from a download.
 
 ### Fixes
+- An oversized merged EPUB (over 200 MB) was reused and imported on the next run, because the size check only ran right after a build. The check now also runs on reused files, and an oversized EPUB is deleted.
+- Pages fetched ahead of the writer are capped at 12 per chapter, so a slow page can't make a long chapter pile up in memory.
+- Part indexes for split volumes use steps of 0.01, so they can't spill into the next volume's number.
+- MangaDex 429 (rate limit) responses are retried after the reset time. Chapters already on disk no longer ask MangaDex for page URLs.
+- The download screen crashed when the merge started (it indexed past the end of the queue), which killed the merge.
 - The `m` key did nothing at first because the key handler only matched `enter` and `c`. It now matches `m` too.
 
 ### Verification

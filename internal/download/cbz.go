@@ -47,6 +47,10 @@ func ChapterPath(root, series, number string) string {
 // stay modest, so this is deliberately well under its rate limits.
 const pageWorkers = 6
 
+// pageAhead caps how many pages may be fetched but not yet written, so a slow
+// early page can't make the rest of a long chapter pile up in memory.
+const pageAhead = 12
+
 var httpClient = &http.Client{
 	Timeout: 60 * time.Second,
 	Transport: &http.Transport{
@@ -83,6 +87,7 @@ func CBZ(ctx context.Context, dest string, pageURLs []string, referer string, pr
 	defer stop()
 	results := make([]chan pageResult, len(pageURLs))
 	jobs := make(chan int)
+	ahead := make(chan struct{}, pageAhead)
 	for i := range results {
 		results[i] = make(chan pageResult, 1)
 	}
@@ -97,6 +102,11 @@ func CBZ(ctx context.Context, dest string, pageURLs []string, referer string, pr
 	go func() {
 		defer close(jobs)
 		for i := range pageURLs {
+			select {
+			case ahead <- struct{}{}:
+			case <-fetchCtx.Done():
+				return
+			}
 			select {
 			case jobs <- i:
 			case <-fetchCtx.Done():
@@ -113,6 +123,7 @@ func CBZ(ctx context.Context, dest string, pageURLs []string, referer string, pr
 		case <-ctx.Done(): // producer stops dispatching once cancelled
 			return ctx.Err()
 		}
+		<-ahead
 		if r.err != nil {
 			return fmt.Errorf("page %d: %w", i+1, r.err)
 		}
