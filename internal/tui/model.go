@@ -77,6 +77,7 @@ type Model struct {
 
 	chapters []source.Chapter
 	selected map[int]bool
+	have     map[string]bool // chapter number -> .cbz already on disk
 
 	// download state
 	queue    []source.Chapter
@@ -152,6 +153,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.chapters, m.cursor = msg.chapters, 0
 		m.selected = map[int]bool{}
+		m.refreshHave()
 		if len(m.chapters) == 0 {
 			if msg.external > 0 {
 				m.err = fmt.Errorf("all %d English chapters are external links (e.g. MANGA Plus) and can't be downloaded; try another entry", msg.external)
@@ -271,6 +273,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = min(len(m.chapters)-1, m.cursor+10)
 		case " ":
 			m.selected[m.cursor] = !m.selected[m.cursor]
+		case "f": // select from the cursor to the last chapter
+			for i := m.cursor; i < len(m.chapters); i++ {
+				m.selected[i] = true
+			}
 		case "a":
 			all := len(m.selected) == len(m.chapters)
 			m.selected = map[int]bool{}
@@ -306,9 +312,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case screenDownload:
 		if m.finished && (key == "esc" || key == "q" || key == "enter") {
 			m.queue, m.screen, m.cursor = nil, screenChapters, 0
+			m.refreshHave()
 		}
 	}
 	return m, nil
+}
+
+// refreshHave records which chapters of the current series are already
+// downloaded.
+func (m *Model) refreshHave() {
+	m.have = make(map[string]bool, len(m.chapters))
+	for _, c := range m.chapters {
+		if _, err := os.Stat(download.ChapterPath(m.root, m.manga.Title, c.Number)); err == nil {
+			m.have[c.Number] = true
+		}
+	}
 }
 
 // sourceFor returns the source a result came from.
@@ -490,12 +508,15 @@ func (m Model) View() string {
 				mark = selectedStyle.Render("[x] ")
 			}
 			line := "Ch. " + c.Number
+			if m.have[c.Number] {
+				line += okStyle.Render(" ✓")
+			}
 			if c.Title != "" {
 				line += dimStyle.Render(" " + c.Title)
 			}
 			b.WriteString(row(i == m.cursor, mark, line))
 		}
-		b.WriteString("\n" + dimStyle.Render("space toggle • a all • enter download • c per-chapter convert+Calibre • m merge into volumes+Calibre (cursor chapter if none selected) • esc back"))
+		b.WriteString("\n" + dimStyle.Render("space toggle • f select from here to end • a all • enter download • c per-chapter convert+Calibre • m merge into volumes+Calibre (cursor chapter if none selected) • esc back"))
 
 	case screenDownload:
 		fmt.Fprintf(&b, "Downloading to %s\n\n", m.root)

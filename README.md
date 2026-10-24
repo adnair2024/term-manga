@@ -59,6 +59,7 @@ The app has four screens.
 | Chapters | `↑`/`↓` or `k`/`j` | Move                                                          |
 | Chapters | `pgup`/`pgdn`      | Move 10 chapters                                              |
 | Chapters | `space`            | Select or deselect a chapter                                  |
+| Chapters | `f`                | Select the chapter under the cursor and every chapter after it |
 | Chapters | `a`                | Select all, or clear the selection if all are selected        |
 | Chapters | `enter`            | Download only                                                 |
 | Chapters | `c`                | Download, convert each chapter to its own EPUB, and import into Calibre |
@@ -87,6 +88,8 @@ Sources implement the `source.Source` interface in `internal/source/source.go`. 
 - Chapters with no volume number are chunked 12 at a time (`<Series> - Ch. 41-50.epub`). Volumes of more than 12 chapters are split into parts (`Vol. 3 pt. 1`).
 - A file over 200 MB is reported as an error and not imported. Very large omnibuses make Kindles lag.
 - An existing merged EPUB is reused. If a volume gains chapters later, delete its EPUB to rebuild it.
+
+In the chapter list, a green `✓` after a chapter means its `.cbz` is already in `~/Manga`. The marks refresh when you return from a download.
 
 ## Where files go
 

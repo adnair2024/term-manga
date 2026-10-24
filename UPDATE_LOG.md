@@ -25,6 +25,10 @@
 - Comick was checked and rejected: its API lists chapters but returns no page images.
 - Tested the Mangapill client against the live site (search, 420 chapters, 38 pages for chapter 1) and added a unit test with a fake server.
 
+### Chapter list
+- `f` selects the chapter under the cursor and every chapter after it.
+- Chapters already downloaded show a green `✓`. The marks refresh when you come back from a download.
+
 ### Fixes
 - The `m` key did nothing at first because the key handler only matched `enter` and `c`. It now matches `m` too.
 
