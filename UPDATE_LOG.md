@@ -16,10 +16,22 @@
 - Existing volume EPUBs are reused, so a volume that gained chapters needs its EPUB deleted to rebuild.
 - `c` still converts and imports one chapter at a time.
 
+### Multiple sources (Mangapill added)
+- New `source.Source` interface (`internal/source/source.go`). MangaDex now implements it, and the TUI no longer depends on MangaDex types.
+- New Mangapill source (`internal/mangapill`). It scrapes HTML because the site has no API, so it can break if the markup changes. It has no volume data, so `m` chunks its chapters 12 at a time.
+- Search queries every source in parallel. Results are tagged `[MangaDex]` or `[Mangapill]`. A source that fails is skipped unless all of them fail.
+- Chapters and page downloads go through the source the chosen result came from.
+- `download.CBZ` takes a `referer` argument, since Mangapill's image CDN returns 403 without one. Page URLs with a query string (`?t=...`) now keep the right file extension.
+- Comick was checked and rejected: its API lists chapters but returns no page images.
+- Tested the Mangapill client against the live site (search, 420 chapters, 38 pages for chapter 1) and added a unit test with a fake server.
+
+### Fixes
+- The `m` key did nothing at first because the key handler only matched `enter` and `c`. It now matches `m` too.
+
 ### Verification
 - `go vet` clean; `go test -race ./...` passes.
 - `kcc-c2e --filefusion` was run by hand on two small test CBZs and produced one merged EPUB.
-- Not yet run end to end against MangaDex and Calibre.
+- Run by hand in the TUI: parallel downloads and the `m` merge both work.
 
 ## 2026-10-20 and earlier
 
