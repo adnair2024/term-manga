@@ -55,7 +55,8 @@ type (
 		number string
 		err    error
 	}
-	mergeDoneMsg struct{ errs []error }
+	mergeDoneMsg     struct{ errs []error }
+	mergeProgressMsg struct{ done, total int }
 )
 
 type Model struct {
@@ -80,18 +81,21 @@ type Model struct {
 	have     map[string]bool // chapter number -> .cbz already on disk
 
 	// download state
-	queue    []source.Chapter
-	qIdx     int
-	pageDone int
-	pageTot  int
-	stage    string
-	convert  bool
-	merge    bool // convert per-volume merged EPUBs instead of one per chapter
-	okChs    []source.Chapter
-	log      []string
-	progCh   chan tea.Msg
-	cancel   context.CancelFunc
-	finished bool
+	queue                 []source.Chapter
+	qIdx                  int
+	pageDone              int
+	pageTot               int
+	stage                 string
+	convert               bool
+	merge                 bool // convert per-volume merged EPUBs instead of one per chapter
+	okChs                 []source.Chapter
+	nOK                   int // chapters finished OK in this run
+	nFail                 int // chapters that failed in this run
+	mergeDone, mergeTotal int
+	log                   []string
+	progCh                chan tea.Msg
+	cancel                context.CancelFunc
+	finished              bool
 }
 
 func New() (Model, error) {
@@ -169,6 +173,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stage = msg.name
 		return m, waitProgress(m.progCh)
 
+	case mergeProgressMsg:
+		m.mergeDone, m.mergeTotal = msg.done, msg.total
+		return m, waitProgress(m.progCh)
+
 	case pageProgressMsg:
 		m.stage = "downloading"
 		m.pageDone, m.pageTot = msg.done, msg.total
@@ -178,7 +186,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chapterDoneMsg:
 		if msg.err != nil {
 			m.log = append(m.log, errStyle.Render("✗ Ch. "+msg.number+": "+msg.err.Error()))
+			m.nFail++
 		} else {
+			m.nOK++
 			m.log = append(m.log, okStyle.Render("✓ Ch. "+msg.number))
 			m.okChs = append(m.okChs, m.queue[m.qIdx])
 		}
@@ -196,6 +206,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.bar.SetPercent(0), dl)
 
 	case mergeDoneMsg:
+		m.mergeDone = m.mergeTotal
 		for _, err := range msg.errs {
 			m.log = append(m.log, errStyle.Render("✗ "+err.Error()))
 		}
@@ -287,6 +298,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case "enter", "c", "m":
 			m.convert, m.merge, m.okChs = key == "c" || key == "m", key == "m", nil
+			m.nOK, m.nFail, m.mergeDone, m.mergeTotal = 0, 0, 0, 0
 			for i, c := range m.chapters {
 				if m.selected[i] {
 					m.queue = append(m.queue, c)
@@ -394,7 +406,8 @@ func (m *Model) mergeCmd() tea.Cmd {
 	return func() tea.Msg {
 		defer cancel()
 		var errs []error
-		for _, v := range vols {
+		for i, v := range vols {
+			progCh <- mergeProgressMsg{i, len(vols)}
 			progCh <- stageMsg{"merging " + v.Label}
 			cbzs := make([]string, len(v.Chapters))
 			for i, c := range v.Chapters {
@@ -521,19 +534,23 @@ func (m Model) View() string {
 		b.WriteString("\n" + dimStyle.Render("space toggle • f select from here to end • a all • enter download • c per-chapter convert+Calibre • m merge into volumes+Calibre (cursor chapter if none selected) • esc back"))
 
 	case screenDownload:
-		fmt.Fprintf(&b, "Downloading to %s\n\n", m.root)
-		for _, l := range m.log {
-			b.WriteString(l + "\n")
-		}
-		if m.finished {
-			b.WriteString("\n" + okStyle.Render("Done.") + " " + dimStyle.Render("enter/esc back"))
-		} else if m.qIdx >= len(m.queue) {
+		fmt.Fprintf(&b, "%s\n\n", titleStyle.Render("Downloading "+m.manga.Title)+dimStyle.Render("  → "+m.root))
+		b.WriteString(m.recentLog() + "\n")
+		fmt.Fprintf(&b, "%s  %s\n\n", okStyle.Render(fmt.Sprintf("✓ %d", m.nOK)), failCount(m.nFail))
+		total := len(m.queue)
+		switch {
+		case m.finished:
+			fmt.Fprintf(&b, "%s\n%s\n", m.bar.ViewAs(1), okStyle.Render("Done.")+" "+dimStyle.Render("enter/esc back"))
+		case m.qIdx >= len(m.queue):
 			// Every chapter is downloaded; the merge/import stage is running.
-			fmt.Fprintf(&b, "\n%s %s", m.spin.View(), m.stage)
-		} else {
+			b.WriteString(dimStyle.Render(fmt.Sprintf("Volumes %d/%d", m.mergeDone, m.mergeTotal)) + "\n")
+			b.WriteString(m.bar.ViewAs(ratio(m.mergeDone, m.mergeTotal)) + "\n\n")
+			fmt.Fprintf(&b, "%s %s\n", m.spin.View(), m.stage)
+		default:
 			cur := m.queue[m.qIdx]
-			fmt.Fprintf(&b, "\n%s Ch. %s (%d/%d)  %s", m.spin.View(),
-				cur.Number, m.qIdx+1, len(m.queue), m.stage)
+			fmt.Fprintf(&b, "%s\n%s\n\n", dimStyle.Render(fmt.Sprintf("Overall: chapter %d/%d", m.qIdx+1, total)),
+				m.bar.ViewAs(ratio(m.qIdx, total)))
+			fmt.Fprintf(&b, "%s Ch. %s  %s", m.spin.View(), cur.Number, m.stage)
 			if m.stage == "downloading" || m.stage == "" {
 				fmt.Fprintf(&b, "  page %d/%d\n%s", m.pageDone, m.pageTot, m.bar.View())
 			}
@@ -567,4 +584,40 @@ func window(cursor, n, h int) (int, int) {
 	}
 	start := min(max(0, cursor-h/2), n-h)
 	return start, start + h
+}
+
+func ratio(done, total int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(done) / float64(total)
+}
+
+func failCount(n int) string {
+	if n == 0 {
+		return dimStyle.Render("✗ 0")
+	}
+	return errStyle.Render(fmt.Sprintf("✗ %d", n))
+}
+
+// recentLog returns the newest log lines that fit, with a note for the rest.
+func (m Model) recentLog() string {
+	room := 10
+	if m.height > 0 {
+		room = max(3, m.height-16)
+	}
+	lines := m.log
+	var hidden int
+	if len(lines) > room {
+		hidden = len(lines) - room
+		lines = lines[hidden:]
+	}
+	var b strings.Builder
+	if hidden > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("… %d earlier", hidden)) + "\n")
+	}
+	for _, l := range lines {
+		b.WriteString(l + "\n")
+	}
+	return b.String()
 }

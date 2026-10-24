@@ -125,11 +125,31 @@ func ConvertMerged(ctx context.Context, cbzs []string, title, out string) error 
 		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 			return err
 		}
-		args := []string{"-p", Profile, "-m", "-c", "2", "-f", "EPUB", "--nokepub",
-			"--filefusion", "-t", title, "-o", out}
-		cmd := exec.CommandContext(ctx, "kcc-c2e", append(args, cbzs...)...)
-		if b, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("kcc-c2e: %w: %s", err, tail(b))
+		args := []string{"-p", Profile, "-m", "-c", "2", "-f", "EPUB", "--nokepub"}
+		// KCC rejects --filefusion with fewer than two sources, which happens
+		// when a volume or chunk holds a single chapter.
+		if len(cbzs) > 1 {
+			args = append(args, "--filefusion")
+		}
+		args = append(args, "-t", title, "-o", out)
+		// KCC occasionally fails on a volume that builds fine when retried
+		// (its temp files can vanish mid-run), so give it a second try.
+		var kerr error
+		for attempt := 0; attempt < 2; attempt++ {
+			cmd := exec.CommandContext(ctx, "kcc-c2e", append(args, cbzs...)...)
+			b, err := cmd.CombinedOutput()
+			if err == nil {
+				kerr = nil
+				break
+			}
+			os.Remove(out)
+			kerr = fmt.Errorf("kcc-c2e: %w: %s", err, tail(b))
+			if ctx.Err() != nil {
+				return kerr
+			}
+		}
+		if kerr != nil {
+			return kerr
 		}
 	}
 	fi, err := os.Stat(out)

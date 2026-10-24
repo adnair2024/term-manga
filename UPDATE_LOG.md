@@ -25,6 +25,11 @@
 - Comick was checked and rejected: its API lists chapters but returns no page images.
 - Tested the Mangapill client against the live site (search, 420 chapters, 38 pages for chapter 1) and added a unit test with a fake server.
 
+### Download screen
+- Added an overall progress bar (chapter N of M) above the per-chapter page bar.
+- The merge step now has its own bar (volumes done of total) with the current step underneath.
+- The log shows only the newest lines that fit, with a "… N earlier" note, so long runs no longer push the bars off screen. A running `✓ n  ✗ n` count sits below it.
+
 ### Chapter list
 - `f` selects the chapter under the cursor and every chapter after it.
 - Chapters already downloaded show a green `✓`. The marks refresh when you come back from a download.
