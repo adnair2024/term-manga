@@ -4,6 +4,8 @@ A terminal UI for getting manga onto an e-reader. Search MangaDex and Mangapill 
 
 Built in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles) and [Lip Gloss](https://github.com/charmbracelet/lipgloss).
 
+![term-manga demo: search for a manga, pick a chapter, download it](recordings/term-manga-demo.gif)
+
 ## Pipeline
 
 ```
