@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -17,7 +18,9 @@ import (
 
 	"github.com/ashwinnair/term-manga/internal/download"
 	"github.com/ashwinnair/term-manga/internal/mangadex"
+	"github.com/ashwinnair/term-manga/internal/mangapill"
 	"github.com/ashwinnair/term-manga/internal/pipeline"
+	"github.com/ashwinnair/term-manga/internal/source"
 )
 
 type screen int
@@ -40,9 +43,9 @@ var (
 
 // Messages.
 type (
-	searchDoneMsg   struct{ manga []mangadex.Manga }
+	searchDoneMsg   struct{ manga []source.Manga }
 	chaptersDoneMsg struct {
-		chapters []mangadex.Chapter
+		chapters []source.Chapter
 		external int
 	}
 	errMsg          struct{ err error }
@@ -56,8 +59,8 @@ type (
 )
 
 type Model struct {
-	client *mangadex.Client
-	root   string
+	sources []source.Source
+	root    string
 
 	screen  screen
 	input   textinput.Model
@@ -68,22 +71,22 @@ type Model struct {
 	width   int
 	height  int
 
-	results []mangadex.Manga
+	results []source.Manga
 	cursor  int
-	manga   mangadex.Manga
+	manga   source.Manga
 
-	chapters []mangadex.Chapter
+	chapters []source.Chapter
 	selected map[int]bool
 
 	// download state
-	queue    []mangadex.Chapter
+	queue    []source.Chapter
 	qIdx     int
 	pageDone int
 	pageTot  int
 	stage    string
 	convert  bool
 	merge    bool // convert per-volume merged EPUBs instead of one per chapter
-	okChs    []mangadex.Chapter
+	okChs    []source.Chapter
 	log      []string
 	progCh   chan tea.Msg
 	cancel   context.CancelFunc
@@ -105,11 +108,11 @@ func New() (Model, error) {
 	sp.Spinner = spinner.Dot
 
 	return Model{
-		client: mangadex.New(),
-		root:   root,
-		input:  ti,
-		spin:   sp,
-		bar:    progress.New(progress.WithDefaultGradient(), progress.WithWidth(40)),
+		sources: []source.Source{mangadex.New(), mangapill.New()},
+		root:    root,
+		input:   ti,
+		spin:    sp,
+		bar:     progress.New(progress.WithDefaultGradient(), progress.WithWidth(40)),
 	}, nil
 }
 
@@ -251,7 +254,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			m.manga = m.results[m.cursor]
 			m.loading, m.err = true, nil
-			return m, m.chaptersCmd(m.manga.ID)
+			return m, m.chaptersCmd(m.manga)
 		case "esc", "q":
 			m.screen, m.err = screenSearch, nil
 		}
@@ -276,15 +279,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.selected[i] = true
 				}
 			}
-		case "enter", "c":
-			m.convert = key == "c"
+		case "enter", "c", "m":
+			m.convert, m.merge, m.okChs = key == "c" || key == "m", key == "m", nil
 			for i, c := range m.chapters {
 				if m.selected[i] {
 					m.queue = append(m.queue, c)
 				}
 			}
 			if len(m.queue) == 0 {
-				m.queue = []mangadex.Chapter{m.chapters[m.cursor]}
+				m.queue = []source.Chapter{m.chapters[m.cursor]}
 			}
 			if m.convert {
 				if err := pipeline.CheckTools(); err != nil {
@@ -308,19 +311,54 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// sourceFor returns the source a result came from.
+func (m Model) sourceFor(name string) source.Source {
+	for _, s := range m.sources {
+		if s.Name() == name {
+			return s
+		}
+	}
+	return m.sources[0]
+}
+
+// searchCmd searches every source in parallel. A source that fails is skipped
+// unless all of them fail.
 func (m Model) searchCmd(q string) tea.Cmd {
 	return func() tea.Msg {
-		r, err := m.client.Search(context.Background(), q)
-		if err != nil {
-			return errMsg{err}
+		type res struct {
+			manga []source.Manga
+			err   error
 		}
-		return searchDoneMsg{r}
+		out := make([]res, len(m.sources))
+		var wg sync.WaitGroup
+		for i, s := range m.sources {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				out[i].manga, out[i].err = s.Search(context.Background(), q)
+			}()
+		}
+		wg.Wait()
+		var all []source.Manga
+		var errs []string
+		for i, r := range out {
+			if r.err != nil {
+				errs = append(errs, m.sources[i].Name()+": "+r.err.Error())
+				continue
+			}
+			all = append(all, r.manga...)
+		}
+		if len(all) == 0 && len(errs) > 0 {
+			return errMsg{fmt.Errorf("%s", strings.Join(errs, "; "))}
+		}
+		return searchDoneMsg{all}
 	}
 }
 
-func (m Model) chaptersCmd(id string) tea.Cmd {
+func (m Model) chaptersCmd(manga source.Manga) tea.Cmd {
+	src := m.sourceFor(manga.Source)
 	return func() tea.Msg {
-		c, ext, err := m.client.Chapters(context.Background(), id)
+		c, ext, err := src.Chapters(context.Background(), manga.ID)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -371,18 +409,18 @@ func (m *Model) downloadCmd() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	ch := m.queue[m.qIdx]
-	series, client, root, progCh := m.manga.Title, m.client, m.root, m.progCh
+	series, src, root, progCh := m.manga.Title, m.sourceFor(m.manga.Source), m.root, m.progCh
 	convert := m.convert && !m.merge // merge mode converts once, after all downloads
 
 	run := func() tea.Msg {
 		defer cancel()
-		urls, err := client.PageURLs(ctx, ch.ID)
+		urls, err := src.PageURLs(ctx, ch.ID)
 		if err != nil {
 			return chapterDoneMsg{ch.Number, err}
 		}
 		dest := download.ChapterPath(root, series, ch.Number)
 		if _, statErr := os.Stat(dest); statErr != nil {
-			err = download.CBZ(ctx, dest, urls, func(done, total int) {
+			err = download.CBZ(ctx, dest, urls, src.Referer(), func(done, total int) {
 				select {
 				case progCh <- pageProgressMsg{done, total}:
 				default: // UI is behind; drop the update
@@ -431,7 +469,7 @@ func (m Model) View() string {
 		start, end := window(m.cursor, len(m.results), m.listHeight())
 		for i := start; i < end; i++ {
 			r := m.results[i]
-			line := r.Title
+			line := dimStyle.Render("["+r.Source+"] ") + r.Title
 			if r.Year > 0 {
 				line += dimStyle.Render(" (" + strconv.Itoa(r.Year) + ")")
 			}

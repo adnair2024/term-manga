@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ashwinnair/term-manga/internal/mangadex"
+	"github.com/ashwinnair/term-manga/internal/source"
 )
 
 // Profile is the KCC device profile (Kindle Paperwhite 5, 1236x1648).
@@ -71,13 +71,13 @@ const (
 type Volume struct {
 	Label    string  // e.g. "Vol. 3" or "Ch. 41-50"
 	Index    float64 // Calibre series index
-	Chapters []mangadex.Chapter
+	Chapters []source.Chapter
 }
 
 // GroupVolumes splits chapters (in reading order) into volumes. Consecutive
 // chapters sharing a MangaDex volume stay together; chapters with no volume
 // are chunked max at a time. Anything longer than max is split into parts.
-func GroupVolumes(chs []mangadex.Chapter, max int) []Volume {
+func GroupVolumes(chs []source.Chapter, max int) []Volume {
 	var out []Volume
 	for i := 0; i < len(chs); {
 		j := i

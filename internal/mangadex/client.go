@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/ashwinnair/term-manga/internal/source"
 )
 
 const baseURL = "https://api.mangadex.org"
@@ -24,20 +26,16 @@ func New() *Client {
 	return &Client{HTTP: &http.Client{Timeout: 30 * time.Second}, BaseURL: baseURL}
 }
 
-type Manga struct {
-	ID    string
-	Title string
-	Year  int
-}
+type (
+	Manga   = source.Manga
+	Chapter = source.Chapter
+)
 
-type Chapter struct {
-	ID      string
-	Number  string
-	Title   string
-	Volume  string
-	Pages   int
-	sortKey float64
-}
+// Name implements source.Source.
+func (c *Client) Name() string { return "MangaDex" }
+
+// Referer implements source.Source; MangaDex images need none.
+func (c *Client) Referer() string { return "" }
 
 func (c *Client) get(ctx context.Context, path string, q url.Values, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path+"?"+q.Encode(), nil)
@@ -96,7 +94,7 @@ func (c *Client) Search(ctx context.Context, title string) ([]Manga, error) {
 				break
 			}
 		}
-		m := Manga{ID: d.ID, Title: t}
+		m := Manga{ID: d.ID, Title: t, Source: c.Name()}
 		if d.Attributes.Year != nil {
 			m.Year = *d.Attributes.Year
 		}
@@ -114,6 +112,7 @@ func (c *Client) Chapters(ctx context.Context, mangaID string) ([]Chapter, int, 
 	const pageSize = 100
 	seen := map[string]bool{}
 	var out []Chapter
+	keys := map[string]float64{}
 	external := 0
 	for offset := 0; ; offset += pageSize {
 		q := url.Values{}
@@ -164,14 +163,14 @@ func (c *Client) Chapters(ctx context.Context, mangaID string) ([]Chapter, int, 
 			if a.Title != nil {
 				ch.Title = *a.Title
 			}
-			ch.sortKey, _ = strconv.ParseFloat(ch.Number, 64)
+			keys[ch.ID], _ = strconv.ParseFloat(ch.Number, 64)
 			out = append(out, ch)
 		}
 		if offset+pageSize >= res.Total {
 			break
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].sortKey < out[j].sortKey })
+	sort.SliceStable(out, func(i, j int) bool { return keys[out[i].ID] < keys[out[j].ID] })
 	return out, external, nil
 }
 

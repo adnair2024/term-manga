@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -60,7 +61,7 @@ var httpClient = &http.Client{
 // CBZ downloads pageURLs into a zip at dest, calling progress(done, total) after
 // each page. The archive is written to a temp file and renamed on success, so a
 // failed download never leaves a partial .cbz behind.
-func CBZ(ctx context.Context, dest string, pageURLs []string, progress func(done, total int)) error {
+func CBZ(ctx context.Context, dest string, pageURLs []string, referer string, progress func(done, total int)) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
@@ -88,7 +89,7 @@ func CBZ(ctx context.Context, dest string, pageURLs []string, progress func(done
 	for w := 0; w < min(pageWorkers, len(pageURLs)); w++ {
 		go func() {
 			for i := range jobs {
-				data, err := fetchPage(fetchCtx, pageURLs[i])
+				data, err := fetchPage(fetchCtx, pageURLs[i], referer)
 				results[i] <- pageResult{data, err}
 			}
 		}()
@@ -117,7 +118,7 @@ func CBZ(ctx context.Context, dest string, pageURLs []string, progress func(done
 		}
 		// Images are already compressed; store them as-is, zero-padded for page order.
 		w, err := zw.CreateHeader(&zip.FileHeader{
-			Name:   fmt.Sprintf("%04d%s", i+1, path.Ext(u)),
+			Name:   fmt.Sprintf("%04d%s", i+1, pageExt(u)),
 			Method: zip.Store,
 		})
 		if err != nil {
@@ -148,7 +149,7 @@ type pageResult struct {
 	err  error
 }
 
-func fetchPage(ctx context.Context, u string) ([]byte, error) {
+func fetchPage(ctx context.Context, u, referer string) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -156,6 +157,9 @@ func fetchPage(ctx context.Context, u string) ([]byte, error) {
 			return nil, err
 		}
 		req.Header.Set("User-Agent", "mangapipeline/0.1")
+		if referer != "" {
+			req.Header.Set("Referer", referer)
+		}
 		resp, err := httpClient.Do(req)
 		if err == nil {
 			if resp.StatusCode == http.StatusOK {
@@ -178,4 +182,12 @@ func fetchPage(ctx context.Context, u string) ([]byte, error) {
 		}
 	}
 	return nil, lastErr
+}
+
+// pageExt returns the file extension of a page URL, ignoring any query string.
+func pageExt(u string) string {
+	if p, err := url.Parse(u); err == nil {
+		return path.Ext(p.Path)
+	}
+	return path.Ext(u)
 }

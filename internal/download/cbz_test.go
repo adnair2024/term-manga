@@ -14,7 +14,7 @@ func TestCBZ(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("img" + r.URL.Path)) }))
 	defer srv.Close()
 	dest := ChapterPath(t.TempDir(), "My: Series", "1.5")
-	err := CBZ(context.Background(), dest, []string{srv.URL + "/a.png", srv.URL + "/b.jpg"}, nil)
+	err := CBZ(context.Background(), dest, []string{srv.URL + "/a.png", srv.URL + "/b.jpg?t=1"}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestCBZFailureLeavesNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	dest := filepath.Join(t.TempDir(), "x.cbz")
-	if err := CBZ(ctx, dest, []string{srv.URL + "/a.png"}, nil); err == nil {
+	if err := CBZ(ctx, dest, []string{srv.URL + "/a.png"}, "", nil); err == nil {
 		t.Fatal("expected error")
 	}
 	for _, p := range []string{dest, dest + ".part"} {
